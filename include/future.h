@@ -170,14 +170,10 @@ namespace generic {
                     continuation<Arg>* node; // maybe use weak_ptr here
             };
 
-            continuation_chain() = default;
-
-            ~continuation_chain() {
-                while( _head ) {
-                    auto tmp = std::move(_head);
-                    _head = std::move(_head->next());
-                }
-            }
+            continuation_chain()                            = default;
+            continuation_chain( const continuation_chain& ) = delete;
+            continuation_chain( continuation_chain&& )      = default;
+            ~continuation_chain()                           = default;
 
             template < class InputIt >
             continuation_chain( InputIt first, InputIt last ) :
