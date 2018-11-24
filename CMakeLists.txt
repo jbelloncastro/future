@@ -28,4 +28,5 @@ set_target_properties(futures PROPERTIES
     )
 
 add_subdirectory(test)
+add_subdirectory(examples)
 

@@ -6,15 +6,27 @@ include(GoogleTest)
 
 enable_testing()
 
-add_executable(test
-    test.cc
+add_executable(construction
+    construction.cc
     )
 
-target_link_libraries(test
+target_link_libraries(construction
     futures
     GTest::GTest
     GTest::Main
     )
 
-gtest_discover_tests(test)
+gtest_discover_tests(construction)
+
+add_executable(continuation
+    continuation.cc
+    )
+
+target_link_libraries(continuation
+    futures
+    GTest::GTest
+    GTest::Main
+    )
+
+gtest_discover_tests(continuation)
 

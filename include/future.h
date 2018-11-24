@@ -465,6 +465,9 @@ class future {
         future( future&& )      = default;
         ~future()               = default;
 
+        future& operator=( const future& ) = delete;
+        future& operator=( future&& ) noexcept = default;
+
         bool valid() const {
             return _state;
         }
@@ -502,6 +505,9 @@ class future<void> {
         future( const future& ) = delete;
         future( future&& )      = default;
         ~future()               = default;
+
+        future& operator=( const future& ) = delete;
+        future& operator=( future&& ) noexcept = default;
 
         bool valid() const {
             return _state != nullptr;
@@ -542,6 +548,9 @@ class promise {
         promise( promise&& )      = default;
         ~promise()                = default;
 
+        promise& operator=( const promise& ) = delete;
+        promise& operator=( promise&& ) noexcept = default;
+
         future<T> get_future() {
             if( _state ) {
                 throw future_error(future_errc::future_already_retrieved);
@@ -550,11 +559,11 @@ class promise {
             return future<T>(_state);
         }
 
-        void set_value( T value ) {
+        void set_value( const T& value ) {
             if( !_state ) {
                 throw future_error( future_errc::no_state );
             }
-            _state->emplace( std::move(value) );
+            _state->emplace(value);
         }
 
         void set_value( T&& value ) {
@@ -583,6 +592,9 @@ struct promise<void> {
         promise( const promise& ) = delete;
         promise( promise&& )      = default;
         ~promise()                = default;
+
+        promise& operator=( const promise& ) = delete;
+        promise& operator=( promise&& ) noexcept = default;
 
         future<void> get_future() {
             if( _state ) {
