@@ -550,6 +550,13 @@ class promise {
             return future<T>(_state);
         }
 
+        void set_value( T value ) {
+            if( !_state ) {
+                throw future_error( future_errc::no_state );
+            }
+            _state->emplace( std::move(value) );
+        }
+
         void set_value( T&& value ) {
             if( !_state ) {
                 throw future_error( future_errc::no_state );

@@ -65,3 +65,17 @@ TEST (VoidPromise, Future_SetException) {
     EXPECT_TRUE (success);
 }
 
+TEST (IntPromise, Future_SetValue) {
+    promise<int> intp;
+    future<int> intf = intp.get_future();
+
+    try {
+        int set = 55;
+        intp.set_value(set);
+        ASSERT_EQ( set, intf.get() );
+    } catch (...) {
+        // Unreachable code
+        ASSERT_TRUE(false);
+    }
+}
+
