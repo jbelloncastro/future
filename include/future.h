@@ -272,8 +272,8 @@ namespace generic {
             };
 
             bool is_pending()  const { return _state == status::pending; }
-            bool is_resolved() const { return _state == status::pending; }
-            bool is_rejected() const { return _state == status::pending; }
+            bool is_resolved() const { return _state == status::resolved; }
+            bool is_rejected() const { return _state == status::rejected; }
 
             void resolve() {
                 _state = status::resolved;
@@ -566,6 +566,41 @@ class promise {
 
     private:
         std::shared_ptr<shared_state<T>> _state;
+};
+
+template <>
+struct promise<void> {
+    public:
+        promise() = default;
+
+        promise( const promise& ) = delete;
+        promise( promise&& )      = default;
+        ~promise()                = default;
+
+        future<void> get_future() {
+            if( _state ) {
+                throw future_error(future_errc::future_already_retrieved);
+            }
+            _state = std::make_shared<shared_state<void>>();
+            return future<void>(_state);
+        }
+
+        void set_value() {
+            if( !_state ) {
+                throw future_error( future_errc::no_state );
+            }
+            _state->emplace();
+        }
+
+        void set_exception( std::exception_ptr exception ) {
+            if( !_state ) {
+                throw future_error( future_errc::no_state );
+            }
+            _state->emplace( exception );
+        }
+
+    private:
+        std::shared_ptr<shared_state<void>> _state;
 };
 
 template < class F >
