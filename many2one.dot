@@ -1,0 +1,17 @@
+digraph one_to_one{
+    promise_0 -> shared_0;
+    promise_1 -> shared_1;
+    promise_2 -> shared_2;
+    promise_3 -> shared_3;
+
+    shared_0 -> shared_4;
+    shared_1 -> shared_4;
+    shared_2 -> shared_4;
+    shared_3 -> shared_4;
+
+    shared_0 -> future_0;
+    shared_1 -> future_1;
+    shared_2 -> future_2;
+    shared_3 -> future_3;
+    shared_4 -> future_4;
+}
