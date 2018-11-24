@@ -354,6 +354,12 @@ class shared_state<void> : public generic::shared_state, public generic::continu
             this->reject();
         }
 
+        void value() {
+            if( this->is_rejected() ) {
+                std::rethrow_exception(exception());
+            }
+        }
+
         std::exception_ptr exception() {
             return _eptr;
         }
@@ -458,6 +464,7 @@ class future {
         }
 
         T get() {
+            // Should block until shared state is not pending
             return _state->value();
         }
 
@@ -475,13 +482,45 @@ class future {
         {
         }
 
-        template < class F, class Arg >
-        future( std::shared_ptr<continuation<F,Arg>> state ):
+        std::shared_ptr<shared_state<T>> _state;
+};
+
+template <>
+class future<void> {
+    public:
+        future()                = default;
+        future( const future& ) = delete;
+        future( future&& )      = default;
+        ~future()               = default;
+
+        bool valid() const {
+            return _state != nullptr;
+        }
+
+        bool is_ready() const {
+            return !_state->is_pending();
+        }
+
+        void get() {
+            _state->value();
+            return;
+        }
+
+        template < class F >
+        auto then( F&& function );
+
+    private:
+        friend class promise<void>;
+
+        template < class U >
+        friend class future;
+
+        future( std::shared_ptr<shared_state<void>> state ) :
             _state(state)
         {
         }
 
-        std::shared_ptr<shared_state<T>> _state;
+        std::shared_ptr<shared_state<void>> _state;
 };
 
 template < class T >
@@ -520,7 +559,7 @@ class promise {
 };
 
 template < class F >
-auto shared_state<void>::then( F&& f ) {
+inline auto shared_state<void>::then( F&& f ) {
     auto ptr = std::make_shared<continuation<F,void>>( std::forward<F>(f) );
     this->attach(ptr->shared_from_this());
     return std::move(ptr);
@@ -528,26 +567,25 @@ auto shared_state<void>::then( F&& f ) {
 
 template < class T >
 template < class F >
-auto shared_state<T>::then( F&& f ) {
+inline auto shared_state<T>::then( F&& f ) {
     auto ptr = std::make_shared<continuation<F,T>>( std::forward<F>(f) );
     this->attach(ptr->shared_from_this());
     return std::move(ptr);
 }
 
-template <>
+template < class T >
 template < class F >
-auto future<void>::then( F&& function ) {
-    using value_type = typename std::result_of<F()>::type;
+inline auto future<T>::then( F&& function ) {
+    using value_type = typename std::result_of<F(T)>::type;
 
     auto cont = _state->then( std::forward<F>(function) );
     future<value_type> result(std::move(cont));
     return result;
 }
 
-template < class T >
 template < class F >
-auto future<T>::then( F&& function ) {
-    using value_type = typename std::result_of<F(T)>::type;
+inline auto future<void>::then( F&& function ) {
+    using value_type = typename std::result_of<F()>::type;
 
     auto cont = _state->then( std::forward<F>(function) );
     future<value_type> result(std::move(cont));
