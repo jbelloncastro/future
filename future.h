@@ -70,24 +70,26 @@ namespace generic {
             {
             }
 
+            virtual ~continuation() = default;
+
             void operator()( Arg arg ) {
                 _f(*this, arg);
             };
 
-            void hook_after( continuation<Arg>& node ) {
-                node._next = _next;
-                _next = &node;
+            void hook_after( std::shared_ptr<continuation<Arg>> node ) {
+                node->_next = std::move(_next);
+                _next = std::move(node);
             }
 
-            continuation* next() {
+            std::shared_ptr<continuation>& next() {
                 return _next;
             }
 
         private:
             friend class continuation_chain<Arg>;
 
-            continuation* _next; // Intrusive list hook
-            dispatch_fn   _f;    // Dispatch function
+            std::shared_ptr<continuation> _next; // Intrusive list hook
+            dispatch_fn                   _f;    // Dispatch function
     };
 
     template <>
@@ -100,24 +102,26 @@ namespace generic {
             {
             }
 
+            virtual ~continuation() = default;
+
             void operator()() {
                 _f(*this);
             };
 
-            void hook_after( continuation<void>& node ) {
-                node._next = _next;
-                _next = &node;
+            void hook_after( std::shared_ptr<continuation<void>> node ) {
+                node->_next = std::move(_next);
+                _next = std::move(node);
             }
 
-            continuation* next() {
+            std::shared_ptr<continuation>& next() {
                 return _next;
             }
 
         private:
             friend class continuation_chain<void>;
 
-            continuation* _next; // Intrusive list hook
-            dispatch_fn   _f;    // Dispatch function
+            std::shared_ptr<continuation> _next; // Intrusive list hook
+            dispatch_fn                   _f;    // Dispatch function
     };
 
     /** Single intrusive linked list that connects all the continuations with the
@@ -146,10 +150,9 @@ namespace generic {
                         return node;
                     }
 
-
                     // Pre increment
                     void operator++() {
-                        node = node->next();
+                        node = node->next().get();
                     }
 
                     // Post increment
@@ -164,10 +167,17 @@ namespace generic {
                     }
 
                 private:
-                    continuation<Arg>* node;
+                    continuation<Arg>* node; // maybe use weak_ptr here
             };
 
             continuation_chain() = default;
+
+            ~continuation_chain() {
+                while( _head ) {
+                    auto tmp = std::move(_head);
+                    _head = std::move(_head->next());
+                }
+            }
 
             template < class InputIt >
             continuation_chain( InputIt first, InputIt last ) :
@@ -180,7 +190,7 @@ namespace generic {
 
             void insert( std::shared_ptr<continuation<Arg>> listener ) {
                 if( _head )
-                    listener->hook_after(*_head);
+                    listener->hook_after(_head);
                 _head = listener;
             }
 
