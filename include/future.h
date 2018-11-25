@@ -53,17 +53,17 @@ namespace generic {
     /*
      * Forward declaration for continuation_chan
      */
-    template < class Arg >
+    template < class... Args >
     class continuation_chain;
 
     /**
      * Continuations are function objects to be called when a shared
      * data is resolved.
      */
-    template < class Arg >
-    class continuation : public std::enable_shared_from_this<continuation<Arg>> {
+    template < class... Args >
+    class continuation : public std::enable_shared_from_this<continuation<Args...>> {
         public:
-            using dispatch_fn = void(*)(continuation&, Arg);
+            using dispatch_fn = void(*)(continuation&, Args...);
 
             continuation( dispatch_fn func ) :
                 _f(func)
@@ -72,11 +72,11 @@ namespace generic {
 
             virtual ~continuation() = default;
 
-            void operator()( Arg arg ) {
-                _f(*this, arg);
+            void operator()( Args... args ) {
+                _f(*this, args...);
             };
 
-            void hook_after( std::shared_ptr<continuation<Arg>> node ) {
+            void hook_after( std::shared_ptr<continuation<Args...>> node ) {
                 node->_next = std::move(_next);
                 _next = std::move(node);
             }
@@ -86,39 +86,7 @@ namespace generic {
             }
 
         private:
-            friend class continuation_chain<Arg>;
-
-            std::shared_ptr<continuation> _next; // Intrusive list hook
-            dispatch_fn                   _f;    // Dispatch function
-    };
-
-    template <>
-    class continuation<void> : public std::enable_shared_from_this<continuation<void>> {
-        public:
-            using dispatch_fn = void(*)(continuation&);
-
-            continuation( dispatch_fn func ) :
-                _f(func)
-            {
-            }
-
-            virtual ~continuation() = default;
-
-            void operator()() {
-                _f(*this);
-            };
-
-            void hook_after( std::shared_ptr<continuation<void>> node ) {
-                node->_next = std::move(_next);
-                _next = std::move(node);
-            }
-
-            std::shared_ptr<continuation>& next() {
-                return _next;
-            }
-
-        private:
-            friend class continuation_chain<void>;
+            friend class continuation_chain<Args...>;
 
             std::shared_ptr<continuation> _next; // Intrusive list hook
             dispatch_fn                   _f;    // Dispatch function
@@ -127,7 +95,7 @@ namespace generic {
     /** Single intrusive linked list that connects all the continuations with the
      * same predecessor.
      */
-    template < class Arg >
+    template < class... Args >
     class continuation_chain {
         public:
             // A single linked list iterator
@@ -135,18 +103,18 @@ namespace generic {
                 public:
                     iterator() = default;
 
-                    iterator( continuation<Arg>* n ) :
+                    iterator( continuation<Args...>* n ) :
                         node(n)
                     {
                     }
 
                     iterator( const iterator& other ) = default;
 
-                    continuation<Arg>* operator*() {
+                    continuation<Args...>* operator*() {
                         return node;
                     }
 
-                    const continuation<Arg>* operator*() const {
+                    const continuation<Args...>* operator*() const {
                         return node;
                     }
 
@@ -167,7 +135,7 @@ namespace generic {
                     }
 
                 private:
-                    continuation<Arg>* node; // maybe use weak_ptr here
+                    continuation<Args...>* node; // maybe use weak_ptr here
             };
 
             continuation_chain()                            = default;
@@ -184,7 +152,7 @@ namespace generic {
                 }
             }
 
-            void insert( std::shared_ptr<continuation<Arg>> listener ) {
+            void insert( std::shared_ptr<continuation<Args...>> listener ) {
                 if( _head )
                     listener->hook_after(_head);
                 _head = listener;
@@ -194,10 +162,10 @@ namespace generic {
             iterator end()   { return iterator(); }
 
         private:
-            std::shared_ptr<continuation<Arg>> _head; // replace with shared_ptr
+            std::shared_ptr<continuation<Args...>> _head; // replace with shared_ptr
     };
 
-    template < class Arg >
+    template < class... Args >
     struct continuable {
         public:
             continuable() = default;
@@ -214,51 +182,19 @@ namespace generic {
             {
             }
 
-            void propagate( Arg arg ) {
+            void propagate( Args... args ) {
                 // Move semantics when function argument is r-value reference
                 for( auto continuation : _chain ) {
-                    (*continuation)(std::forward<Arg>(arg));
+                    (*continuation)(std::forward<Args>(args)...);
                 }
             }
 
-            void attach( std::shared_ptr<generic::continuation<Arg>> listener ) {
+            void attach( std::shared_ptr<generic::continuation<Args...>> listener ) {
                 _chain.insert(std::move(listener));
             }
 
         private:
-            continuation_chain<Arg> _chain;
-    };
-
-    template <>
-    struct continuable<void> {
-        public:
-            continuable() = default;
-
-            template < class InputIt >
-            continuable( InputIt begin, InputIt end ) :
-                _chain(begin,end)
-            {
-            }
-
-            template < class Container >
-            continuable( Container& elements ) :
-                _chain( std::begin(elements), std::end(elements) )
-            {
-            }
-
-            void propagate() {
-                // Move semantics when function argument is r-value reference
-                for( auto continuation : _chain ) {
-                    (*continuation)();
-                }
-            }
-
-            void attach( std::shared_ptr<generic::continuation<void>> listener ) {
-                _chain.insert(std::move(listener));
-            }
-
-        private:
-            continuation_chain<void> _chain;
+            continuation_chain<Args...> _chain;
     };
 
     class shared_state {
@@ -343,7 +279,7 @@ class shared_state : public generic::shared_state, public generic::continuable<T
 };
 
 template <>
-class shared_state<void> : public generic::shared_state, public generic::continuable<void> {
+class shared_state<void> : public generic::shared_state, public generic::continuable<> {
     public:
         shared_state()                    = default;
         shared_state(const shared_state&) = delete;
@@ -376,75 +312,38 @@ class shared_state<void> : public generic::shared_state, public generic::continu
         std::exception_ptr _eptr;
 };
 
-template < class Continuation, class R, class F, class Arg >
+template < class Continuation, class R, class F, class... Args >
 struct dispatcher {
-    static constexpr void invoke( generic::continuation<Arg>& base, Arg arg ) {
+    static constexpr void invoke( generic::continuation<Args...>& base, Args... args ) {
         auto& c = static_cast<Continuation&>(base);
-        c.emplace( c._func(arg) );
+        c.emplace( c._func(args...) );
     }
 };
 
-template < class Continuation, class F, class Arg >
-struct dispatcher<Continuation,void,F,Arg> {
-    static constexpr void invoke( generic::continuation<Arg>& base, Arg arg ) {
+template < class Continuation, class F, class... Args >
+struct dispatcher<Continuation,void,F,Args...> {
+    static constexpr void invoke( generic::continuation<Args...>& base, Args... args ) {
         auto& c = static_cast<Continuation&>(base);
-        c._func(arg);
+        c._func(args...);
         c.emplace();
     }
 };
 
-template < class Continuation, class R, class F >
-struct dispatcher<Continuation,R,F,void> {
-    static constexpr void invoke( generic::continuation<void>& base ) {
-        auto& c = static_cast<Continuation&>(base);
-        c.emplace( c._func() );
-    }
-};
-
-template < class Continuation, class F >
-struct dispatcher<Continuation,void,F,void> {
-    static constexpr void invoke( generic::continuation<void>& base ) {
-        auto& c = static_cast<Continuation&>(base);
-        c._func();
-        c.emplace();
-    }
-};
-
-template < class F, class Arg >
-class continuation : public shared_state<typename std::result_of<F(Arg)>::type>,
-                     public generic::continuation<Arg>
+template < class F, class... Args >
+class continuation : public shared_state<typename std::result_of<F(Args...)>::type>,
+                     public generic::continuation<Args...>
 {
     public:
-        using value_type = typename std::result_of<F(Arg)>::type;
+        using value_type = typename std::result_of<F(Args...)>::type;
 
         continuation( F&& func ) :
-            generic::continuation<Arg>( &dispatcher<continuation,value_type,F,Arg>::invoke ),
+            generic::continuation<Args...>( &dispatcher<continuation,value_type,F,Args...>::invoke ),
             _func(std::forward<F>(func))
         {
         }
 
     private:
-        template < class _Continuation, class  _R, class _F, class _Arg >
-        friend class dispatcher;
-
-        F _func;
-};
-
-template < class F >
-class continuation<F,void> : public shared_state<typename std::result_of<F()>::type>,
-                             public generic::continuation<void>
-{
-    public:
-        using value_type = typename std::result_of<F()>::type;
-
-        continuation( F&& func ) :
-            generic::continuation<void>( &dispatcher<continuation,value_type,F,void>::invoke ),
-            _func(std::forward<F>(func))
-        {
-        }
-
-    private:
-        template < class _Continuation, class  _R, class _F, class _Arg >
+        template < class _Continuation, class  _R, class _F, class... _Args >
         friend class dispatcher;
 
         F _func;
@@ -616,6 +515,61 @@ struct promise<void> {
 
     private:
         std::shared_ptr<shared_state<void>> _state;
+};
+
+template < class >
+class packaged_task;
+
+/** Defers a call to a type-erased function.
+ * It is similar to a promise + future::then, but with a single shared state
+ * (result), rather than two (one for the argument, i.e. promise::set_value, and
+ * another for the result).
+ */
+template < class R, class... Args >
+class packaged_task<R(Args...)> : public generic::continuable<Args...> {
+    packaged_task() noexcept = default;
+
+    template < class F >
+    packaged_task( F&& f ) :
+        packaged_task()
+    {
+        // This is similar to a 'shared_state::then', the difference being
+        // that the argument comes from a function call rather than another
+        // state.
+        auto ptr = std::make_shared<continuation<F,Args...>>( std::forward<F>(f) );
+        this->attach(ptr);
+        _state = std::move(ptr);
+    }
+
+    packaged_task( const packaged_task& )     = delete;
+    packaged_task( packaged_task&& ) noexcept = default;
+    ~packaged_task()                          = default;
+
+    bool valid() const {
+        return _state != nullptr;
+    }
+
+    void swap( packaged_task& other ) {
+        // Delegate to move constructor: just swaps the pointers.
+        std::swap( *this, other );
+    }
+
+    future<R> get_future() {
+        if( !_state ) {
+            throw future_error( future_errc::no_state );
+        }
+        return future<R>(_state);
+    }
+
+    void operator()( Args... args ) {
+        this->propagate(std::forward<Args>(args)...);
+    }
+
+    private:
+        // Would this rather be a regular pointer?
+        // Continuable::continuation_chain already has a shared pointer to the
+        // same object.
+        std::shared_ptr<shared_state<R>> _state;
 };
 
 template < class F >
