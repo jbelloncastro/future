@@ -382,6 +382,9 @@ class future {
     private:
         friend class promise<T>;
 
+        template < class >
+        friend class packaged_task;
+
         template < class U >
         friend class future;
 
@@ -422,6 +425,9 @@ class future<void> {
 
     private:
         friend class promise<void>;
+
+        template < class >
+        friend class packaged_task;
 
         template < class U >
         friend class future;
@@ -527,43 +533,44 @@ class packaged_task;
  */
 template < class R, class... Args >
 class packaged_task<R(Args...)> : public generic::continuable<Args...> {
-    packaged_task() noexcept = default;
+    public:
+        packaged_task() noexcept = default;
 
-    template < class F >
-    packaged_task( F&& f ) :
-        packaged_task()
-    {
-        // This is similar to a 'shared_state::then', the difference being
-        // that the argument comes from a function call rather than another
-        // state.
-        auto ptr = std::make_shared<continuation<F,Args...>>( std::forward<F>(f) );
-        this->attach(ptr);
-        _state = std::move(ptr);
-    }
-
-    packaged_task( const packaged_task& )     = delete;
-    packaged_task( packaged_task&& ) noexcept = default;
-    ~packaged_task()                          = default;
-
-    bool valid() const {
-        return _state != nullptr;
-    }
-
-    void swap( packaged_task& other ) {
-        // Delegate to move constructor: just swaps the pointers.
-        std::swap( *this, other );
-    }
-
-    future<R> get_future() {
-        if( !_state ) {
-            throw future_error( future_errc::no_state );
+        template < class F >
+        packaged_task( F&& f ) :
+            packaged_task()
+        {
+            // This is similar to a 'shared_state::then', the difference being
+            // that the argument comes from a function call rather than another
+            // state.
+            auto ptr = std::make_shared<continuation<F,Args...>>( std::forward<F>(f) );
+            this->attach(ptr);
+            _state = std::move(ptr);
         }
-        return future<R>(_state);
-    }
 
-    void operator()( Args... args ) {
-        this->propagate(std::forward<Args>(args)...);
-    }
+        packaged_task( const packaged_task& )     = delete;
+        packaged_task( packaged_task&& ) noexcept = default;
+        ~packaged_task()                          = default;
+
+        bool valid() const {
+            return _state != nullptr;
+        }
+
+        void swap( packaged_task& other ) {
+            // Delegate to move constructor: just swaps the pointers.
+            std::swap( *this, other );
+        }
+
+        future<R> get_future() {
+            if( !_state ) {
+                throw future_error( future_errc::no_state );
+            }
+            return future<R>(_state);
+        }
+
+        void operator()( Args... args ) {
+            this->propagate(std::forward<Args>(args)...);
+        }
 
     private:
         // Would this rather be a regular pointer?
