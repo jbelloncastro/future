@@ -8,6 +8,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <cassert>
+
 /** Error codes for future and promise errors
  */
 enum class future_errc {
@@ -21,7 +23,7 @@ enum class future_errc {
  */
 class future_error : public std::exception {
     public:
-        future_error( future_errc code ) :
+        explicit future_error( future_errc code ) :
             _code(code)
         {
         }
@@ -65,7 +67,7 @@ namespace generic {
         public:
             using dispatch_fn = void(*)(continuation&, Args...);
 
-            continuation( dispatch_fn func ) :
+            explicit continuation( dispatch_fn func ) :
                 _f(func)
             {
             }
@@ -83,6 +85,10 @@ namespace generic {
 
             std::shared_ptr<continuation>& next() {
                 return _next;
+            }
+
+            bool has_next() const {
+                return _next != nullptr;
             }
 
         private:
@@ -158,6 +164,10 @@ namespace generic {
                 _head = listener;
             }
 
+            bool empty() const {
+                return _head != nullptr;
+            }
+
             iterator begin() { return iterator(_head.get()); }
             iterator end()   { return iterator(); }
 
@@ -177,13 +187,12 @@ namespace generic {
             }
 
             template < class Container >
-            continuable( Container& elements ) :
+            explicit continuable( Container& elements ) :
                 _chain( std::begin(elements), std::end(elements) )
             {
             }
 
             void propagate( Args... args ) {
-                // Move semantics when function argument is r-value reference
                 for( auto continuation : _chain ) {
                     (*continuation)(std::forward<Args>(args)...);
                 }
@@ -200,19 +209,32 @@ namespace generic {
     class shared_state {
         public:
             enum class status {
-                pending, resolved, rejected
+                pending,         // value not set
+                pending_shared,  // value not set, multiple listeners
+                resolved, // value set but not consumed (may be shared)
+                rejected, // exception set
+                consumed // value already consumed (not shared)
             };
 
             bool is_pending()  const { return _state == status::pending; }
+            bool is_shared()   const { return _state == status::pending_shared; }
             bool is_resolved() const { return _state == status::resolved; }
             bool is_rejected() const { return _state == status::rejected; }
+            bool is_consumed() const { return _state == status::consumed; }
 
-            void resolve() {
+            void resolved() {
+                assert( is_pending() );
                 _state = status::resolved;
             }
 
-            void reject() {
+            void rejected() {
+                assert( is_pending() );
                 _state = status::rejected;
+            }
+
+            void consumed() {
+                assert( is_resolved() || is_rejected() );
+                _state = status::consumed;
             }
 
         private:
@@ -226,48 +248,63 @@ class shared_state : public generic::shared_state, public generic::continuable<T
     public:
         shared_state()                    = default;
         shared_state(const shared_state&) = delete;
+
+        // TODO: Implement move constructor
         shared_state(shared_state&&)      = delete;
 
         ~shared_state() {
-            // TODO: Make dstructor trivial if T is trivially destructible
+            // TODO: Make destructor trivial if T is trivially destructible
             if( is_resolved() ) {
-                value().~T();
+                value(std::true_type()).~T();
             }
         }
 
         template < class... Args >
         void emplace( Args&&... args ) {
             new (&_storage) T(std::forward<Args>(args)...);
-            this->resolve();
-            this->propagate(value());
-        }
+            // XXX: How can we better differentiate if we have
+            // shared_futures or not at this point?
+            bool shared = this->is_shared();
+            this->resolved();
 
+            if( shared ) {
+                this->propagate(value(std::true_type()));
+            } else {
+                this->propagate(std::move(value(std::false_type())));
+            }
+        }
 
         void emplace( std::exception_ptr exception ) {
             new (&_storage) std::exception_ptr(exception);
-            this->reject();
+            this->rejected();
         }
 
-        T& value() {
+        /* Retrieves a non-shared value */
+        T& value( std::false_type ) {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
+            if( this->is_consumed() ) {
+                throw future_error( future_errc::future_already_retrieved);
+            }
+            this->consumed();
             return reinterpret_cast<T&>(_storage);
         }
 
-        const T& value() const {
+        /* Retrieves a shared value */
+        const T& value( std::true_type ) const {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
+            }
+            if( this->is_consumed() ) {
+                throw future_error( future_errc::future_already_retrieved);
             }
             return reinterpret_cast<const T&>(_storage);
         }
 
-        std::exception_ptr exception() {
-            return reinterpret_cast<std::exception_ptr&>(_storage);
+        std::exception_ptr exception() const {
+            return reinterpret_cast<const std::exception_ptr&>(_storage);
         }
-
-        template < class F >
-        auto then( F&& function );
 
     private:
         static constexpr size_t storage_size  = std::max(sizeof(T),sizeof(std::exception_ptr));
@@ -287,28 +324,45 @@ class shared_state<void> : public generic::shared_state, public generic::continu
         ~shared_state()                   = default;
 
         void emplace() {
-            this->resolve();
+            this->resolved();
             this->propagate();
         }
 
         void emplace( std::exception_ptr exception ) {
             _eptr = exception;
-            this->reject();
+            this->rejected();
         }
 
-        void value() {
+        template < bool shared >
+        void value();
+
+        // Overload for unique value. Does consume value.
+        void value( std::false_type ) {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
+            if( this->is_consumed() ) {
+                throw future_error( future_errc::future_already_retrieved);
+            }
+            this->consumed();
         }
 
-        std::exception_ptr exception() {
+        // Overload for shared value. Does not consume value.
+        void value( std::true_type ) {
+            if( this->is_rejected() ) {
+                std::rethrow_exception(exception());
+            }
+            if( this->is_consumed() ) {
+                throw future_error( future_errc::future_already_retrieved);
+            }
+            // Does not invalidate the shared state's value
+        }
+
+        std::exception_ptr exception() const {
             return _eptr;
         }
 
-        template < class F >
-        auto then( F&& function );
-    public:
+    private:
         std::exception_ptr _eptr;
 };
 
@@ -352,16 +406,16 @@ class continuation : public shared_state<typename std::result_of<F(Args...)>::ty
 template < class T >
 class promise;
 
-template < class T >
-class future {
+template < class T, bool shared >
+class future_impl {
     public:
-        future()                = default;
-        future( const future& ) = delete;
-        future( future&& )      = default;
-        ~future()               = default;
+        future_impl()                = default;
+        future_impl( const future_impl& ) = delete;
+        future_impl( future_impl&& )      = default;
+        ~future_impl()               = default;
 
-        future& operator=( const future& ) = delete;
-        future& operator=( future&& ) noexcept = default;
+        future_impl& operator=( const future_impl& ) = delete;
+        future_impl& operator=( future_impl&& ) noexcept = default;
 
         bool valid() const {
             return _state;
@@ -371,41 +425,40 @@ class future {
             return !_state->is_pending();
         }
 
-        T get() {
-            // Should block until shared state is not pending
-            return _state->value();
+        auto get() {
+            // FIXME: Should block until shared state is not pending
+            return _state->value(std::integral_constant<bool,shared>());
         }
 
         template < class F >
-        auto then( F&& function );
+        auto then( F&& f );
 
-    private:
-        friend class promise<T>;
-
-        template < class >
-        friend class packaged_task;
-
-        template < class U >
-        friend class future;
-
-        future( std::shared_ptr<shared_state<T>> state ) :
+    protected:
+        explicit future_impl( std::shared_ptr<shared_state<T>> state ) :
             _state(state)
         {
         }
 
+        std::shared_ptr<shared_state<T>> invalidate() {
+            return std::move(_state);
+        }
+
+    private:
+        template < class, bool >
+        friend class future_impl;
+
         std::shared_ptr<shared_state<T>> _state;
 };
 
-template <>
-class future<void> {
+template < bool shared >
+class future_impl<void,shared> {
     public:
-        future()                = default;
-        future( const future& ) = delete;
-        future( future&& )      = default;
-        ~future()               = default;
-
-        future& operator=( const future& ) = delete;
-        future& operator=( future&& ) noexcept = default;
+        future_impl()                                    = default;
+        future_impl( const future_impl& )                = default;
+        future_impl( future_impl&& ) noexcept            = default;
+        ~future_impl()                                   = default;
+        future_impl& operator=( const future_impl& )     = default;
+        future_impl& operator=( future_impl&& ) noexcept = default;
 
         bool valid() const {
             return _state != nullptr;
@@ -416,28 +469,67 @@ class future<void> {
         }
 
         void get() {
-            _state->value();
+            _state->value(std::integral_constant<bool,shared>());
             return;
         }
 
         template < class F >
-        auto then( F&& function );
+        auto then( F&& f );
 
-    private:
-        friend class promise<void>;
-
-        template < class >
-        friend class packaged_task;
-
-        template < class U >
-        friend class future;
-
-        future( std::shared_ptr<shared_state<void>> state ) :
+    protected:
+        explicit future_impl( std::shared_ptr<shared_state<void>> state ) :
             _state(state)
         {
         }
 
+        std::shared_ptr<shared_state<void>> invalidate() {
+            return std::move(_state);
+        }
+
+    private:
+        template < class, bool >
+        friend class future_impl;
+
         std::shared_ptr<shared_state<void>> _state;
+};
+
+template < class T >
+class shared_future : public future_impl<T,true> {};
+
+template < class T >
+class future : public future_impl<T,false> {
+    public:
+        future()                               = default;
+        future( const future& )                = delete;
+        future( future&& ) noexcept            = default;
+        ~future()                              = default;
+        future& operator=( const future& )     = delete;
+        future& operator=( future&& ) noexcept = default;
+
+        template < class F >
+        auto then( F&& f ) {
+            auto result = future_impl<T,false>::then(std::forward<F>(f));
+            this->invalidate();
+            return result;
+        }
+
+        shared_future<T> share() {
+            return shared_future<T>( std::move(this->invalidate()) );
+        }
+
+    private:
+        friend class promise<T>;
+
+        template < class >
+        friend class packaged_task;
+
+        template < class, bool >
+        friend class future_impl;
+
+        explicit future( std::shared_ptr<shared_state<T>> state ) :
+            future_impl<T,false>(std::move(state))
+        {
+        }
 };
 
 template < class T >
@@ -579,38 +671,61 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         std::shared_ptr<shared_state<R>> _state;
 };
 
+template < class T, bool shared >
 template < class F >
-inline auto shared_state<void>::then( F&& f ) {
-    auto ptr = std::make_shared<continuation<F,void>>( std::forward<F>(f) );
-    this->attach(ptr->shared_from_this());
-    return std::move(ptr);
+inline auto future_impl<T,shared>::then( F&& f ) {
+    assert( !_state->is_consumed() );
+
+    using value_type  = typename std::result_of<F(T)>::type;
+    using shared_type = shared_state<value_type>;
+    std::shared_ptr<shared_type> new_state;
+
+    if( _state->is_pending() ) {
+        // Create and attach a continuation
+        auto tmp = std::make_shared<continuation<F,T>>( std::forward<F>(f) );
+        _state->attach(tmp->shared_from_this());
+        new_state = std::move(tmp);
+    } else {
+        new_state = std::make_shared<shared_type>();
+        try {
+            new_state->emplace( std::forward<F>(f)(std::move(get())) );
+        } catch (...) {
+            // Also works if current state is rejected. However, it
+            // could be more efficient to emplace the current exception straight
+            // away, instead of throwing and catching the exception every time.
+            new_state->emplace( std::current_exception() );
+        }
+    }
+    return future<value_type>(std::move(new_state));
 }
 
-template < class T >
+template < bool shared >
 template < class F >
-inline auto shared_state<T>::then( F&& f ) {
-    auto ptr = std::make_shared<continuation<F,T>>( std::forward<F>(f) );
-    this->attach(ptr->shared_from_this());
-    return std::move(ptr);
-}
+inline auto future_impl<void,shared>::then( F&& f ) {
+    assert( !_state->is_consumed() );
 
-template < class T >
-template < class F >
-inline auto future<T>::then( F&& function ) {
-    using value_type = typename std::result_of<F(T)>::type;
+    using value_type  = typename std::result_of<F()>::type;
+    using shared_type = shared_state<value_type>;
+    std::shared_ptr<shared_type> new_state;
 
-    auto cont = _state->then( std::forward<F>(function) );
-    future<value_type> result(std::move(cont));
-    return result;
-}
-
-template < class F >
-inline auto future<void>::then( F&& function ) {
-    using value_type = typename std::result_of<F()>::type;
-
-    auto cont = _state->then( std::forward<F>(function) );
-    future<value_type> result(std::move(cont));
-    return result;
+    if( _state->is_pending() ) {
+        // Create and attach a continuation
+        auto tmp = std::make_shared<continuation<F,void>>( std::forward<F>(f) );
+        _state->attach(tmp->shared_from_this());
+        new_state = std::move(tmp);
+    } else {
+        new_state = std::make_shared<shared_type>();
+        try {
+            get();
+            new_state->emplace( std::forward<F>(f)() );
+        } catch (...) {
+            // Also works if current state is rejected. However, it
+            // could be more efficient to emplace the current exception straight
+            // away, instead of throwing and catching the exception every time.
+            new_state->emplace( std::current_exception() );
+        }
+    }
+    return future<value_type>(std::move(new_state));
 }
 
 #endif // FUTURE_H
