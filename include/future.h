@@ -63,7 +63,7 @@ namespace generic {
      * data is resolved.
      */
     template < class... Args >
-    class continuation : public std::enable_shared_from_this<continuation<Args...>> {
+    class continuation {
         public:
             using dispatch_fn = void(*)(continuation&, Args...);
 
@@ -244,7 +244,9 @@ namespace generic {
 } // namespace generic
 
 template < class T >
-class shared_state : public generic::shared_state, public generic::continuable<T> {
+class shared_state : public generic::shared_state,
+                     public generic::continuable<T>
+{
     public:
         shared_state()                    = default;
         shared_state(const shared_state&) = delete;
@@ -683,7 +685,7 @@ inline auto future_impl<T,shared>::then( F&& f ) {
     if( _state->is_pending() ) {
         // Create and attach a continuation
         auto tmp = std::make_shared<continuation<F,T>>( std::forward<F>(f) );
-        _state->attach(tmp->shared_from_this());
+        _state->attach(tmp);
         new_state = std::move(tmp);
     } else {
         new_state = std::make_shared<shared_type>();
@@ -711,7 +713,7 @@ inline auto future_impl<void,shared>::then( F&& f ) {
     if( _state->is_pending() ) {
         // Create and attach a continuation
         auto tmp = std::make_shared<continuation<F,void>>( std::forward<F>(f) );
-        _state->attach(tmp->shared_from_this());
+        _state->attach(tmp);
         new_state = std::move(tmp);
     } else {
         new_state = std::make_shared<shared_type>();
