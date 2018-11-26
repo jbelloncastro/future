@@ -19,6 +19,20 @@ enum class future_errc {
     no_state
 };
 
+namespace traits {
+
+    template < bool cond >
+    struct copyable {};
+
+    template <>
+    struct copyable<false> {
+        copyable() = default;
+        copyable(copyable&&) = default;
+        copyable(const copyable&) = delete;
+    };
+
+} // namespace traits
+
 /** Exception for future and promise errors
  */
 class future_error : public std::exception {
@@ -258,7 +272,7 @@ class shared_state : public generic::shared_state,
         // TODO: Implement move constructor
         shared_state(shared_state&&)      = delete;
 
-        ~shared_state() {
+        virtual ~shared_state() {
             // TODO: Make destructor trivial if T is trivially destructible
             if( is_resolved() ) {
                 value(std::true_type()).~T();
@@ -334,7 +348,7 @@ class shared_state<void> : public generic::shared_state, public generic::continu
         shared_state()                    = default;
         shared_state(const shared_state&) = delete;
         shared_state(shared_state&&)      = delete;
-        ~shared_state()                   = default;
+        virtual ~shared_state()           = default;
 
         void emplace() {
             this->resolved();
@@ -420,18 +434,31 @@ template < class T >
 class promise;
 
 template < class T, bool shared >
-class future_impl {
+class future_impl : traits::copyable<shared> {
     public:
-        future_impl()                = default;
-        future_impl( const future_impl& ) = delete;
-        future_impl( future_impl&& )      = default;
-        ~future_impl()               = default;
+        future_impl()                                    = default;
+        ~future_impl()                                   = default;
 
-        future_impl& operator=( const future_impl& ) = delete;
+        future_impl( const future_impl& )                = default;
+        future_impl& operator=( const future_impl& )     = default;
+
+        future_impl( future_impl&& )                     = default;
         future_impl& operator=( future_impl&& ) noexcept = default;
 
+        template < typename = std::enable_if<shared> >
+        future_impl( future_impl<T,false>&& other ) :
+            _state( std::move(other._state) )
+        {
+        }
+
+        template < typename = std::enable_if<shared> >
+        future_impl& operator=( future_impl<T,false>&& other ) {
+            _state = std::move(other._state);
+            return *this;
+        }
+
         bool valid() const {
-            return _state;
+            return static_cast<bool>(_state);
         }
 
         bool is_ready() const {
@@ -446,32 +473,47 @@ class future_impl {
         template < class F >
         auto then( F&& f );
 
-    protected:
+    private:
+        template < class, bool >
+        friend class future_impl;
+
+        template < class >
+        friend class promise;
+
+        template < class >
+        friend class packaged_task;
+
         explicit future_impl( std::shared_ptr<shared_state<T>> state ) :
             _state(state)
         {
         }
 
-        std::shared_ptr<shared_state<T>> invalidate() {
-            return std::move(_state);
-        }
-
-    private:
-        template < class, bool >
-        friend class future_impl;
-
         std::shared_ptr<shared_state<T>> _state;
 };
 
 template < bool shared >
-class future_impl<void,shared> {
+class future_impl<void,shared> : traits::copyable<shared> {
     public:
         future_impl()                                    = default;
-        future_impl( const future_impl& )                = default;
-        future_impl( future_impl&& ) noexcept            = default;
         ~future_impl()                                   = default;
+
+        future_impl( const future_impl& )                = default;
         future_impl& operator=( const future_impl& )     = default;
+
+        future_impl( future_impl&& ) noexcept            = default;
         future_impl& operator=( future_impl&& ) noexcept = default;
+
+        template < typename = std::enable_if<shared> >
+        future_impl( future_impl<void,false>&& other ) :
+            _state( std::move(other._state) )
+        {
+        }
+
+        template < typename = std::enable_if<shared> >
+        future_impl& operator=( future_impl<void,false>&& other ) {
+            _state = std::move(other._state);
+            return *this;
+        }
 
         bool valid() const {
             return _state != nullptr;
@@ -482,6 +524,7 @@ class future_impl<void,shared> {
         }
 
         void get() {
+            // FIXME: Should block until shared state is not pending
             _state->value(std::integral_constant<bool,shared>());
             return;
         }
@@ -489,59 +532,49 @@ class future_impl<void,shared> {
         template < class F >
         auto then( F&& f );
 
-    protected:
+    private:
+        template < class, bool >
+        friend class future_impl;
+
+        template < class >
+        friend class promise;
+    
+        template < class >
+        friend class packaged_task;
+
         explicit future_impl( std::shared_ptr<shared_state<void>> state ) :
             _state(state)
         {
         }
 
-        std::shared_ptr<shared_state<void>> invalidate() {
-            return std::move(_state);
-        }
-
-    private:
-        template < class, bool >
-        friend class future_impl;
-
         std::shared_ptr<shared_state<void>> _state;
 };
 
 template < class T >
-class shared_future : public future_impl<T,true> {};
+class shared_future : public future_impl<T,true> {
+    using impl = future_impl<T,true>;
+
+    public:
+        using impl::future_impl;
+        using impl::valid;
+        using impl::is_ready;
+        using impl::get;
+        using impl::then;
+};
 
 template < class T >
 class future : public future_impl<T,false> {
-    public:
-        future()                               = default;
-        future( const future& )                = delete;
-        future( future&& ) noexcept            = default;
-        ~future()                              = default;
-        future& operator=( const future& )     = delete;
-        future& operator=( future&& ) noexcept = default;
+    using impl = future_impl<T,false>;
 
-        template < class F >
-        auto then( F&& f ) {
-            auto result = future_impl<T,false>::then(std::forward<F>(f));
-            this->invalidate();
-            return result;
-        }
+    public:
+        using future_impl<T,false>::future_impl;
+        using future_impl<T,false>::valid;
+        using future_impl<T,false>::is_ready;
+        using future_impl<T,false>::get;
+        using future_impl<T,false>::then;
 
         shared_future<T> share() {
-            return shared_future<T>( std::move(this->invalidate()) );
-        }
-
-    private:
-        friend class promise<T>;
-
-        template < class >
-        friend class packaged_task;
-
-        template < class, bool >
-        friend class future_impl;
-
-        explicit future( std::shared_ptr<shared_state<T>> state ) :
-            future_impl<T,false>(std::move(state))
-        {
+            return shared_future<T>( std::move(*this) );
         }
 };
 
@@ -607,7 +640,7 @@ struct promise<void> {
                 throw future_error(future_errc::future_already_retrieved);
             }
             _state = std::make_shared<shared_state<void>>();
-            return future<void>(_state);
+            return std::move(future<void>(_state));
         }
 
         void set_value() {
