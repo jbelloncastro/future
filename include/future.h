@@ -165,7 +165,7 @@ namespace generic {
             }
 
             bool empty() const {
-                return _head != nullptr;
+                return _head == nullptr;
             }
 
             iterator begin() { return iterator(_head.get()); }
@@ -200,6 +200,10 @@ namespace generic {
 
             void attach( std::shared_ptr<generic::continuation<Args...>> listener ) {
                 _chain.insert(std::move(listener));
+            }
+
+            bool has_continuation() const {
+                return !_chain.empty();
             }
 
         private:
@@ -269,10 +273,17 @@ class shared_state : public generic::shared_state,
             bool shared = this->is_shared();
             this->resolved();
 
-            if( shared ) {
-                this->propagate(value(std::true_type()));
-            } else {
-                this->propagate(std::move(value(std::false_type())));
+            if( this->has_continuation() ) {
+                if( shared ) {
+                    // Shared continuables don't consume the value, so further
+                    // then() and get() are allowed
+                    this->propagate(value(std::true_type()));
+                } else {
+                    // Non-shared continuable moves the value and consumes the
+                    // shared_state instance (no further then() or get()
+                    // allowed)
+                    this->propagate(std::move(value(std::false_type())));
+                }
             }
         }
 
