@@ -734,7 +734,12 @@ inline auto future_impl<T,shared>::then( F&& f ) {
     } else {
         new_state = std::make_shared<shared_type>();
         try {
-            new_state->emplace( std::forward<F>(f)(std::move(get())) );
+            // Don't move the value if it's not shared or a reference!
+            if( !shared && !std::is_reference<T>::value ) {
+                new_state->emplace( std::forward<F>(f)(std::move(get())) );
+            } else {
+                new_state->emplace( std::forward<F>(f)(get()) );
+            }
         } catch (...) {
             // Also works if current state is rejected. However, it
             // could be more efficient to emplace the current exception straight
@@ -742,6 +747,11 @@ inline auto future_impl<T,shared>::then( F&& f ) {
             new_state->emplace( std::current_exception() );
         }
     }
+
+    // Invalidate if the future is not shared
+    if( !shared )
+        _state.reset();
+
     return future<value_type>(std::move(new_state));
 }
 
@@ -771,6 +781,11 @@ inline auto future_impl<void,shared>::then( F&& f ) {
             new_state->emplace( std::current_exception() );
         }
     }
+
+    // Invalidate if the future is not shared
+    if( !shared )
+        _state.reset();
+
     return future<value_type>(std::move(new_state));
 }
 
