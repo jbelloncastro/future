@@ -44,6 +44,9 @@ class when_all_continuation : public shared_state<std::vector<Future>>,
         when_all_continuation( InputIt first, InputIt last ) :
             when_all_continuation(first, last, std::integral_constant<bool,is_shared_future<Future>::value>())
         {
+        }
+
+        void attach_to_futures() {
             // Attach all the futures
             for( Future& f: _futures ) {
                 f.then(this->shared_from_this());
@@ -105,8 +108,9 @@ auto when_all( InputIt first, InputIt last ) -> future<std::vector<typename std:
     using Future      = typename std::iterator_traits<InputIt>::value_type;
     using SharedState = shared_state<std::vector<Future>>;
 
-    std::shared_ptr<SharedState> ptr = std::make_shared<when_all_continuation<Future>>(first,last);
-    return SharedState::get_future_from(ptr);
+    auto ptr = std::make_shared<when_all_continuation<Future>>(first,last);
+    ptr->attach_to_futures();
+    return SharedState::get_future_from(std::move(ptr));
 }
 
 #endif // WHEN_H

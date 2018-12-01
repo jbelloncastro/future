@@ -2,7 +2,7 @@
 #ifndef FUTURE_H
 #define FUTURE_H
 
-#include <vector>
+#include <forward_list>
 
 #include <condition_variable>
 #include <exception>
@@ -69,13 +69,6 @@ class future_error : public std::exception {
 };
 
 namespace generic {
-
-    /*
-     * Forward declaration for continuation_chain
-     */
-    template < class... Args >
-    class continuation_chain;
-
     /**
      * Continuations are function objects to be called when a shared
      * data is resolved.
@@ -96,118 +89,17 @@ namespace generic {
                 _f(*this, std::forward<Args>(args)...);
             };
 
-            void hook_after( std::shared_ptr<continuation> node ) {
-                node->_next = std::move(_next);
-                _next = std::move(node);
-            }
-
-            std::shared_ptr<continuation>& next() {
-                return _next;
-            }
-
-            bool has_next() const {
-                return _next != nullptr;
-            }
-
         private:
-            std::shared_ptr<continuation> _next; // Intrusive list hook
             dispatch_fn                   _f;    // Dispatch function
-    };
-
-    /** Single intrusive linked list that connects all the continuations with the
-     * same predecessor.
-     */
-    template < class... Args >
-    class continuation_chain {
-        public:
-            // A single linked list iterator
-            class iterator {
-                public:
-                    typedef continuation<Args...>* pointer;
-                    typedef continuation<Args...>& reference;
-                    typedef const continuation<Args...>* const_pointer;
-                    typedef const continuation<Args...>& const_reference;
-
-                    iterator() = default;
-
-                    iterator( pointer n ) :
-                        node(n)
-                    {
-                    }
-
-                    iterator( const iterator& other ) = default;
-
-                    reference operator*() {
-                        return *node;
-                    }
-
-                    reference operator->() {
-                        return node;
-                    }
-
-                    const_reference operator*() const {
-                        return node;
-                    }
-
-                    // Pre increment
-                    void operator++() {
-                        node = node->next().get();
-                    }
-
-                    // Post increment
-                    iterator operator++(int) {
-                        iterator copy(*this);
-                        ++(*this);
-                        return copy;
-                    }
-
-                    bool operator!=( const iterator& other ) const {
-                        return node != other.node;
-                    }
-
-                private:
-                    pointer node; // maybe use weak_ptr here
-            };
-
-            continuation_chain()                            = default;
-            continuation_chain( const continuation_chain& ) = delete;
-            continuation_chain( continuation_chain&& )      = default;
-            ~continuation_chain()                           = default;
-
-            template < class InputIt >
-            continuation_chain( InputIt first, InputIt last ) :
-                _head(nullptr)
-            {
-                while( first != last ) {
-                    attach( *first++ );
-                }
-            }
-
-            void insert( std::shared_ptr<continuation<Args...>> listener ) {
-                if( _head )
-                    listener->hook_after(_head);
-                _head = listener;
-            }
-
-            bool empty() const {
-                return _head == nullptr;
-            }
-
-            const std::shared_ptr<continuation<Args...>>& head() const {
-                return _head;
-            }
-
-            iterator begin() { return iterator(_head.get()); }
-            iterator end()   { return iterator(); }
-
-        private:
-            std::shared_ptr<continuation<Args...>> _head; // replace with shared_ptr
     };
 
     template < class... Args >
     struct continuable {
         public:
-            continuable() = default;
+            using continuation_type = generic::continuation<Args...>;
+
+            continuable() noexcept = default;
+            continuable(continuable&&) noexcept = default;
 
             template < class InputIt >
             continuable( InputIt begin, InputIt end ) :
@@ -215,28 +107,20 @@ namespace generic {
             {
             }
 
-            template < class Container >
-            explicit continuable( Container& elements ) :
-                _chain( std::begin(elements), std::end(elements) )
-            {
-            }
-
             void propagate( Args... args ) {
-                for( auto& continuation : _chain ) {
-                    continuation( std::forward<Args>(args)...);
+                while( !_chain.empty() ) {
+                    auto cont = std::move(_chain.front());
+                    _chain.pop_front();
+                    (*cont)( std::forward<Args>(args)...);
                 }
             }
 
-            void attach( std::shared_ptr<generic::continuation<Args...>> listener ) {
-                _chain.insert(std::move(listener));
-            }
-
-            const continuation_chain<Args...>& get_continuations() const {
-                return _chain;
+            void attach( std::shared_ptr<continuation_type> listener ) {
+                _chain.push_front(std::move(listener));
             }
 
         private:
-            continuation_chain<Args...> _chain;
+            std::forward_list<std::shared_ptr<continuation_type>> _chain;
     };
 
     class shared_state {
@@ -822,16 +706,14 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         template < class F >
         packaged_task( F&& f )
         {
-            static_assert( std::is_base_of< shared_state<R>, continuation<F,Args...> >::value, "Oops!" );
             auto ptr = std::make_shared<continuation<F,Args...>>(std::forward<F>(f));
-
             _state_ref = ptr;
             this->attach(std::move(ptr));
         }
 
-        packaged_task( const packaged_task& )     = delete;
+        packaged_task( const packaged_task& ) = delete;
         packaged_task( packaged_task&& ) noexcept = default;
-        ~packaged_task()                          = default;
+        ~packaged_task() = default;
 
         bool valid() const {
             return !_state_ref.expired();

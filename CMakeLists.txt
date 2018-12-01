@@ -27,6 +27,7 @@ set_target_properties(futures PROPERTIES
     LINKER_LANGUAGE CXX
     )
 
+enable_testing()
 add_subdirectory(test)
 add_subdirectory(examples)
 
