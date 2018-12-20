@@ -3,6 +3,23 @@
 
 #include <gtest/gtest.h>
 
+TEST (IntPromise, One2One_Chained) {
+    for( int a = 0; a < 2; a++ ) {
+        int value = 55;
+        promise<int> p;
+        future<int>  f = p.get_future();
+        for( unsigned i = 0; i < 10; i++ ) {
+            f = f.then([=](int i) -> int {
+                EXPECT_EQ(i, value);
+                return i;
+            });
+        }
+        p.set_value(value);
+        int r = f.get();
+        EXPECT_EQ(r, value);
+    }
+}
+
 TEST (IntPromise, One2Many_NoShared) {
     promise<int> intp;
     future<int>  intf = intp.get_future();

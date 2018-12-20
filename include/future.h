@@ -133,6 +133,18 @@ namespace generic {
                 consumed // value already consumed (not shared)
             };
 
+            shared_state() :
+                _state(status::pending),
+                _mutex(),
+                _resolved_cond()
+            {
+            }
+
+            ~shared_state() = default;
+
+            shared_state(const shared_state&) = delete;
+            shared_state(shared_state&&) = delete;
+
             bool is_pending()  const { return _state == status::pending || _state == status::pending_shared; }
             bool is_shared()   const { return _state == status::pending_shared; }
             bool is_resolved() const { return _state == status::resolved; }
