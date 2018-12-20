@@ -9,7 +9,6 @@ TEST (IntPromise, One2Many_NoShared) {
     std::vector<future<bool>> continuations;
 
     int value = 55;
-    bool success = false;
 
     // After future creation, future should be valid or then() has undefined behavior
     ASSERT_TRUE ( intf.valid() );
@@ -45,7 +44,6 @@ TEST (IntPromise, One2Many_Shared) {
     std::vector<future<bool>> continuations;
 
     int value = 55;
-    bool success = false;
 
     // After future creation, future should be valid or then() has undefined behavior
     ASSERT_TRUE ( intf.valid() );
@@ -88,7 +86,6 @@ TEST (IntPromise, Chain_Resolved) {
     bool success = true;
     intp.set_value(set);
 
-    int times = 2;
     for( int times = 2; times > 0; times-- ) {
         intf = intf.then([&]( int i ) -> int {
             success &= (set == i);

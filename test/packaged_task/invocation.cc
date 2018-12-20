@@ -11,7 +11,6 @@ TEST (PackagedTask, Default) {
     future<int> ifut = itask.get_future();
 
     int set = 55;
-    bool success = false;
     
     itask(set);
 

@@ -45,7 +45,7 @@ static void BM_ChainUnsolvedPromise(benchmark::State& state) {
             throw std::runtime_error("Retrieved incorrect value");
     }
 }
-BENCHMARK(BM_ChainSolvedPromise)
+BENCHMARK(BM_ChainUnsolvedPromise)
     ->Args({10})
     ->Args({1000})
     ->Args({1000000})

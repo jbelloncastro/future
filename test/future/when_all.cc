@@ -8,7 +8,6 @@ TEST (WhenAll, Basic) {
     std::vector<shared_future<int>> futures( 10, intp.get_future() );
 
     int value = 55;
-    bool success = false;
 
     auto all_good = when_all(futures.begin(), futures.end());
 
