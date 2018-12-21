@@ -2,6 +2,8 @@
 #ifndef FUTURE_H
 #define FUTURE_H
 
+#include <vector>
+
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -108,9 +110,6 @@ namespace generic {
             }
 
         private:
-            template < class... Args_ >
-            friend class continuation_chain;
-
             std::shared_ptr<continuation> _next; // Intrusive list hook
             dispatch_fn                   _f;    // Dispatch function
     };
@@ -298,6 +297,13 @@ namespace generic {
 
 } // namespace generic
 
+// Forward declarations
+template < class T >
+class promise;
+
+template < class T >
+class future;
+
 template < class T >
 class shared_state : public generic::shared_state,
                      public generic::continuable<shared_state<T>&>
@@ -355,6 +361,8 @@ class shared_state : public generic::shared_state,
             return reinterpret_cast<const std::exception_ptr&>(_storage);
         }
 
+        static future<T> get_future_from( std::shared_ptr<shared_state> state );
+
     private:
         using buffer_t = typename std::aligned_union<0,std::exception_ptr,T>::type;
 
@@ -406,6 +414,8 @@ class shared_state<void> : public generic::shared_state,
         std::exception_ptr exception() const {
             return _eptr;
         }
+
+        static future<void> get_future_from( std::shared_ptr<shared_state> state );
 
     private:
         std::exception_ptr _eptr;
@@ -561,12 +571,6 @@ void dispatcher<continuation<F,shared_state<T>&>>::invoke_share( generic::contin
     cont( state.reference() );
 }
 
-template < class T >
-class promise;
-
-template < class T >
-class future;
-
 template < class T, bool shared >
 class future_impl : traits::copyable<shared> {
     public:
@@ -609,15 +613,16 @@ class future_impl : traits::copyable<shared> {
         template < class F >
         auto then( F&& f ) -> future<typename std::result_of<F(T)>::type>;
 
+        // TODO: not well encapsulated. This is necessary for when_all and when_any
+        void then( std::shared_ptr<generic::continuation<shared_state<T>&>> continuation ) {
+            _state->attach(std::move(continuation));
+        }
+
     private:
-        template < class, bool >
+        friend class shared_state<T>;
+
+        template < class _T, bool _shared >
         friend class future_impl;
-
-        template < class >
-        friend class promise;
-
-        template < class >
-        friend class packaged_task;
 
         explicit future_impl( std::shared_ptr<shared_state<T>> state ) :
             _state(state)
@@ -673,14 +678,7 @@ class future_impl<void,shared> : traits::copyable<shared> {
         auto then( F&& f ) -> future<typename std::result_of<F()>::type>;
 
     private:
-        template < class, bool >
-        friend class future_impl;
-
-        template < class >
-        friend class promise;
-    
-        template < class >
-        friend class packaged_task;
+        friend class shared_state<void>;
 
         explicit future_impl( std::shared_ptr<shared_state<void>> state ) :
             _state(state)
@@ -691,7 +689,7 @@ class future_impl<void,shared> : traits::copyable<shared> {
 };
 
 template < class T >
-class shared_future : future_impl<T,true> {
+class shared_future : public future_impl<T,true> {
     public:
         using future_impl<T,true>::future_impl;
         using future_impl<T,true>::valid;
@@ -701,7 +699,7 @@ class shared_future : future_impl<T,true> {
 };
 
 template < class T >
-class future : future_impl<T,false> {
+class future : public future_impl<T,false> {
     public:
         using future_impl<T,false>::future_impl;
         using future_impl<T,false>::valid;
@@ -713,6 +711,15 @@ class future : future_impl<T,false> {
             return shared_future<T>( std::move(*this) );
         }
 };
+
+template < class Future >
+struct is_shared_future;
+
+template < class T >
+struct is_shared_future<future<T>> : public std::false_type {};
+
+template < class T >
+struct is_shared_future<shared_future<T>> : public std::true_type {};
 
 template < class T >
 class promise {
@@ -731,7 +738,7 @@ class promise {
                 throw future_error(future_errc::future_already_retrieved);
             }
             _state = std::make_shared<shared_state<T>>();
-            return future<T>(_state);
+            return shared_state<T>::get_future_from(_state);
         }
 
         void set_value( const T& value ) {
@@ -776,7 +783,7 @@ struct promise<void> {
                 throw future_error(future_errc::future_already_retrieved);
             }
             _state = std::make_shared<shared_state<void>>();
-            return std::move(future<void>(_state));
+            return shared_state<void>::get_future_from(_state);
         }
 
         void set_value() {
@@ -839,7 +846,7 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
             if( !valid() ) {
                 throw future_error( future_errc::no_state );
             }
-            return future<R>(std::move(_state_ref).lock());
+            return shared_state<R>::get_future_from(_state_ref.lock());
         }
 
         void operator()( Args... args ) {
@@ -851,6 +858,15 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         // who owns the continuation
         std::weak_ptr<shared_state<R>> _state_ref;
 };
+
+template < class T >
+inline future<T> shared_state<T>::get_future_from( std::shared_ptr<shared_state<T>> state ) {
+    return future<T>( std::move(state) );
+}
+
+inline future<void> shared_state<void>::get_future_from( std::shared_ptr<shared_state<void>> state ) {
+    return future<void>( std::move(state) );
+}
 
 template < class T, bool shared >
 template < class F >
@@ -888,7 +904,7 @@ inline auto future_impl<T,shared>::then( F&& f ) -> future<typename std::result_
     if( !shared )
         _state.reset();
 
-    return future<value_type>(std::move(new_state));
+    return shared_type::get_future_from(std::move(new_state));
 }
 
 template <>
@@ -935,6 +951,8 @@ inline auto future_impl<void,shared>::then( F&& f ) -> future<typename std::resu
 
     return future<value_type>(std::move(new_state));
 }
+
+#include "when.h"
 
 #endif // FUTURE_H
 

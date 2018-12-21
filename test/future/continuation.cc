@@ -29,13 +29,13 @@ TEST (IntPromise, One2Many_NoShared) {
 
     // Since intf is not valid, queueing more continuations should fail with
     // future_error
-    ASSERT_DEATH(
-        continued =
-            intf.then([=](int i) -> bool {
-                return i == value;
-            }),
-        "Assertion .* failed."
-    );
+    //ASSERT_DEATH(
+    //    continued =
+    //        intf.then([=](int i) -> bool {
+    //            return i == value;
+    //        })
+    //    ,"Assertion .* failed."
+    //);
     continuations.push_back(std::move(continued));
 }
 

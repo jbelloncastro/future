@@ -20,6 +20,7 @@ gtest_discover_tests(promise_construct)
 
 add_executable(future_continuation
     future/continuation.cc
+    future/when_all.cc
     )
 
 target_link_libraries(future_continuation
