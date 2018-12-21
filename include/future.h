@@ -457,7 +457,7 @@ class continuation : public shared_state_for<F,Args...>::type,
         }
 
         template < class... FArgs >
-        auto invoke( FArgs&&... args ) {
+        auto invoke( FArgs&&... args ) -> typename std::result_of<F(FArgs...)>::type {
             return _func(std::forward<FArgs>(args)...);
         }
 
@@ -499,7 +499,7 @@ class continuation<F,shared_state<T>&> : public shared_state_for<F,T>::type,
         }
 
         template < class... FArgs >
-        auto invoke( FArgs&&... args ) {
+        auto invoke( FArgs&&... args ) -> typename std::result_of<F(FArgs&&...)>::type {
             return _func(std::forward<FArgs>(args)...);
         }
 
@@ -525,24 +525,26 @@ resolve( Continuation& cont, Args&&... args ) {
 template < class F, class... Args >
 struct dispatcher<continuation<F,Args...>> {
     using Continuation = continuation<F,Args...>;
+    using DispatchFunc =  void(generic::continuation<Args...>&, Args&&...);
 
     static void invoke( generic::continuation<Args...>& cont_base, Args&&... args ) {
         Continuation& cont = static_cast<Continuation&>(cont_base);
         cont(std::forward<Args>(args)...);
     }
 
-    static constexpr auto get_dispatch() { return &invoke; }
+    static constexpr DispatchFunc* get_dispatch() { return &invoke; }
 };
 
 template < class F, class T >
 struct dispatcher<continuation<F,shared_state<T>&>> {
     using Continuation = continuation<F,shared_state<T>&>;
+    using DispatchFunc =  void(generic::continuation<shared_state<T>&>&, shared_state<T>&);
 
     static void invoke_consume( generic::continuation<shared_state<T>&>& cont_base, shared_state<T>& state );
     static void invoke_share  ( generic::continuation<shared_state<T>&>& cont_base, shared_state<T>& state );
 
-    static constexpr auto get_dispatch( consume_state_value<true>  ) { return &invoke_consume; }
-    static constexpr auto get_dispatch( consume_state_value<false> ) { return &invoke_share; }
+    static constexpr DispatchFunc* get_dispatch( consume_state_value<true>  ) { return &invoke_consume; }
+    static constexpr DispatchFunc* get_dispatch( consume_state_value<false> ) { return &invoke_share; }
 };
 
 // Non-shared state value access. Consumes state value and forwards to continuation.
@@ -561,6 +563,9 @@ void dispatcher<continuation<F,shared_state<T>&>>::invoke_share( generic::contin
 
 template < class T >
 class promise;
+
+template < class T >
+class future;
 
 template < class T, bool shared >
 class future_impl : traits::copyable<shared> {
@@ -594,7 +599,7 @@ class future_impl : traits::copyable<shared> {
             return !_state->is_pending();
         }
 
-        auto get() {
+        auto get() -> typename std::conditional<shared,const T&,T>::type {
             // Wait until shared_state is ready
             _state->wait();
             // Retrieve value
@@ -602,7 +607,7 @@ class future_impl : traits::copyable<shared> {
         }
 
         template < class F >
-        auto then( F&& f );
+        auto then( F&& f ) -> future<typename std::result_of<F(T)>::type>;
 
     private:
         template < class, bool >
@@ -665,7 +670,7 @@ class future_impl<void,shared> : traits::copyable<shared> {
         void get();
 
         template < class F >
-        auto then( F&& f );
+        auto then( F&& f ) -> future<typename std::result_of<F()>::type>;
 
     private:
         template < class, bool >
@@ -849,7 +854,7 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
 
 template < class T, bool shared >
 template < class F >
-inline auto future_impl<T,shared>::then( F&& f ) {
+inline auto future_impl<T,shared>::then( F&& f ) -> future<typename std::result_of<F(T)>::type> {
     assert( valid() ); // Behavior is undefined if future is not valid
     assert( !_state->is_consumed() );
 
@@ -898,7 +903,7 @@ inline void future_impl<void,false>::get() {
 
 template < bool shared >
 template < class F >
-inline auto future_impl<void,shared>::then( F&& f ) {
+inline auto future_impl<void,shared>::then( F&& f ) -> future<typename std::result_of<F()>::type> {
     assert( valid() ); // Behavior is undefined if future is not valid
     assert( !_state->is_consumed() );
 

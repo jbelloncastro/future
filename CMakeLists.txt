@@ -13,7 +13,7 @@ add_library(futures STATIC
 
 target_compile_features(futures
     PUBLIC
-        cxx_std_14
+        cxx_std_11
     )
 
 target_include_directories(futures
