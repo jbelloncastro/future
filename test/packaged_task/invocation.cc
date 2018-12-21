@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
  
 TEST (PackagedTask, Default) {
-    packaged_task<int(int)> itask( [](int i ) -> int {
+    packaged_task<int(int)> itask( [](int i) -> int {
         return i;
     });
 

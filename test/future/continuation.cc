@@ -11,31 +11,32 @@ TEST (IntPromise, One2Many_NoShared) {
     int value = 55;
     bool success = false;
 
-    // After future creation, both promise and future should be valid
-    EXPECT_TRUE ( intf.valid() );
+    // After future creation, future should be valid or then() has undefined behavior
+    ASSERT_TRUE ( intf.valid() );
 
     // First then() should go all right
+    future<bool> continued;
     ASSERT_NO_THROW(
-        continuations.push_back(
-            intf.then([=](int i) -> bool {
+        continued =
+            intf.then([=](const int& i) -> bool {
                 return i == value;
             })
-        )
     );
+    continuations.push_back(std::move(continued));
 
     // After first then(), first future // should not be valid any more
     EXPECT_FALSE( intf.valid() );
 
     // Since intf is not valid, queueing more continuations should fail with
     // future_error
-    ASSERT_THROW(
-        continuations.push_back(
+    ASSERT_DEATH(
+        continued =
             intf.then([=](int i) -> bool {
                 return i == value;
-            })
-        ),
-        future_error
+            }),
+        "Assertion .* failed."
     );
+    continuations.push_back(std::move(continued));
 }
 
 TEST (IntPromise, One2Many_Shared) {
@@ -46,8 +47,8 @@ TEST (IntPromise, One2Many_Shared) {
     int value = 55;
     bool success = false;
 
-    // After future creation, future should be valid
-    EXPECT_TRUE ( intf.valid() );
+    // After future creation, future should be valid or then() has undefined behavior
+    ASSERT_TRUE ( intf.valid() );
 
     // First then() should go all right
     ASSERT_NO_THROW(
