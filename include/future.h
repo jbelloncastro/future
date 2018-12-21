@@ -126,6 +126,8 @@ namespace generic {
                 public:
                     typedef continuation<Args...>* pointer;
                     typedef continuation<Args...>& reference;
+                    typedef const continuation<Args...>* const_pointer;
+                    typedef const continuation<Args...>& const_reference;
 
                     iterator() = default;
 
@@ -144,7 +146,7 @@ namespace generic {
                         return node;
                     }
 
-                    const reference operator*() const {
+                    const_reference operator*() const {
                         return node;
                     }
 
@@ -192,6 +194,10 @@ namespace generic {
                 return _head == nullptr;
             }
 
+            const std::shared_ptr<continuation<Args...>>& head() const {
+                return _head;
+            }
+
             iterator begin() { return iterator(_head.get()); }
             iterator end()   { return iterator(); }
 
@@ -217,7 +223,7 @@ namespace generic {
             }
 
             void propagate( Args... args ) {
-                for( auto continuation : _chain ) {
+                for( auto& continuation : _chain ) {
                     continuation( std::forward<Args>(args)...);
                 }
             }
@@ -226,8 +232,8 @@ namespace generic {
                 _chain.insert(std::move(listener));
             }
 
-            bool has_continuation() const {
-                return !_chain.empty();
+            const continuation_chain<Args...>& get_continuations() const {
+                return _chain;
             }
 
         private:
@@ -309,7 +315,7 @@ class shared_state : public generic::shared_state,
             // TODO: Make destructor trivial if T is trivially destructible
             if( is_resolved() ) {
                 // Move the value away
-                std::move(value(std::false_type()));
+                std::move(value());
             }
         }
 
@@ -326,16 +332,16 @@ class shared_state : public generic::shared_state,
         }
 
         /* Retrieves a non-shared value */
-        T& value( std::false_type ) {
+        T value() {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
             this->consumed();
-            return reinterpret_cast<T&>(_storage);
+            return std::move(reinterpret_cast<T&>(_storage));
         }
 
         /* Retrieves a shared value: shared state remains valid */
-        const T& value( std::true_type ) const {
+        const T& reference() const {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
@@ -376,7 +382,7 @@ class shared_state<void> : public generic::shared_state,
         }
 
         // Overload for unique value. Does consume value.
-        void value( std::false_type ) {
+        void value() {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
@@ -387,7 +393,7 @@ class shared_state<void> : public generic::shared_state,
         }
 
         // Overload for shared value. Does not consume value.
-        void value( std::true_type ) {
+        void reference() {
             if( this->is_rejected() ) {
                 std::rethrow_exception(exception());
             }
@@ -459,11 +465,16 @@ class continuation : public shared_state_for<F,Args...>::type,
         F _func;
 };
 
-// Tag that indicates a continuation to acquire ownership of the value
+// Tags that indicate a continuation to acquire ownership of the value
 // contained in its predecesor shared state
-template < bool shared >
+template < bool consume_not_share >
 struct consume_state_value {};
 
+static constexpr consume_state_value<true>  continuation_consumes_state = {};
+static constexpr consume_state_value<false> continuation_shares_state   = {};
+
+// Continuation type that takes a shared_state as argument
+// This is the case of continuations instantiated with future::then()
 template < class F, class T >
 class continuation<F,shared_state<T>&> : public shared_state_for<F,T>::type,
                                          public generic::continuation<shared_state<T>&>
@@ -498,14 +509,14 @@ class continuation<F,shared_state<T>&> : public shared_state_for<F,T>::type,
 
 // Either emplaces F's return value (result is not void)
 template < class Continuation, class... Args >
-typename std::enable_if<std::is_same<void,typename Continuation::value_type>::value>::type
+typename std::enable_if<!std::is_same<void,typename Continuation::value_type>::value>::type
 resolve( Continuation& cont, Args&&... args ) {
     cont.emplace( cont.invoke(std::forward<Args>(args)...) );
 }
 
 // or ignores it and emplaces nothing
 template < class Continuation, class... Args >
-typename std::enable_if<!std::is_same<void,typename Continuation::value_type>::value>::type
+typename std::enable_if<std::is_same<void,typename Continuation::value_type>::value>::type
 resolve( Continuation& cont, Args&&... args ) {
     cont.invoke(std::forward<Args>(args)...);
     cont.emplace();
@@ -538,14 +549,14 @@ struct dispatcher<continuation<F,shared_state<T>&>> {
 template < class F, class T >
 void dispatcher<continuation<F,shared_state<T>&>>::invoke_consume( generic::continuation<shared_state<T>&>& cont_base, shared_state<T>& state ) {
     auto& cont = static_cast<Continuation&>(cont_base);
-    cont( std::move(state.value(std::false_type())) );
+    cont( state.value() );
 }
 
 // Shared state value access. Does not consume state value and passes reference to continuation.
 template < class F, class T >
 void dispatcher<continuation<F,shared_state<T>&>>::invoke_share( generic::continuation<shared_state<T>&>& cont_base, shared_state<T>& state ) {
     auto& cont = static_cast<Continuation&>(cont_base);
-    cont( state.value(std::true_type()) );
+    cont( state.reference() );
 }
 
 template < class T >
@@ -584,7 +595,10 @@ class future_impl : traits::copyable<shared> {
         }
 
         auto get() {
-            return _state->value(std::integral_constant<bool,shared>());
+            // Wait until shared_state is ready
+            _state->wait();
+            // Retrieve value
+            return get_impl( std::integral_constant<bool,shared>() );
         }
 
         template < class F >
@@ -603,6 +617,14 @@ class future_impl : traits::copyable<shared> {
         explicit future_impl( std::shared_ptr<shared_state<T>> state ) :
             _state(state)
         {
+        }
+
+        const T& get_impl( std::integral_constant<bool,true> ) {
+            return _state->reference();
+        }
+
+        T get_impl( std::integral_constant<bool,false> ) {
+            return _state->value();
         }
 
         std::shared_ptr<shared_state<T>> _state;
@@ -640,11 +662,7 @@ class future_impl<void,shared> : traits::copyable<shared> {
             return !_state->is_pending();
         }
 
-        void get() {
-            // FIXME: Should block until shared state is not pending
-            _state->value(std::integral_constant<bool,shared>());
-            return;
-        }
+        void get();
 
         template < class F >
         auto then( F&& f );
@@ -668,21 +686,17 @@ class future_impl<void,shared> : traits::copyable<shared> {
 };
 
 template < class T >
-class shared_future : public future_impl<T,true> {
-    using impl = future_impl<T,true>;
-
+class shared_future : future_impl<T,true> {
     public:
-        using impl::future_impl;
-        using impl::valid;
-        using impl::is_ready;
-        using impl::get;
-        using impl::then;
+        using future_impl<T,true>::future_impl;
+        using future_impl<T,true>::valid;
+        using future_impl<T,true>::is_ready;
+        using future_impl<T,true>::get;
+        using future_impl<T,true>::then;
 };
 
 template < class T >
-class future : public future_impl<T,false> {
-    using impl = future_impl<T,false>;
-
+class future : future_impl<T,false> {
     public:
         using future_impl<T,false>::future_impl;
         using future_impl<T,false>::valid;
@@ -791,16 +805,16 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
     public:
         packaged_task() noexcept = default;
 
+        // This is similar to a 'shared_state::then', the difference being that
+        // the argument comes from a function call rather than another state.
         template < class F >
-        packaged_task( F&& f ) :
-            packaged_task()
+        packaged_task( F&& f )
         {
-            // This is similar to a 'shared_state::then', the difference being
-            // that the argument comes from a function call rather than another
-            // state.
-            auto ptr = std::make_shared<continuation<F,Args...>>( std::forward<F>(f) );
-            this->attach(ptr);
-            _state = std::move(ptr);
+            static_assert( std::is_base_of< shared_state<R>, continuation<F,Args...> >::value, "Oops!" );
+            auto ptr = std::make_shared<continuation<F,Args...>>(std::forward<F>(f));
+
+            _state_ref = ptr;
+            this->attach(std::move(ptr));
         }
 
         packaged_task( const packaged_task& )     = delete;
@@ -808,7 +822,7 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         ~packaged_task()                          = default;
 
         bool valid() const {
-            return _state != nullptr;
+            return !_state_ref.expired();
         }
 
         void swap( packaged_task& other ) {
@@ -817,10 +831,10 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         }
 
         future<R> get_future() {
-            if( !_state ) {
+            if( !valid() ) {
                 throw future_error( future_errc::no_state );
             }
-            return future<R>(_state);
+            return future<R>(std::move(_state_ref).lock());
         }
 
         void operator()( Args... args ) {
@@ -828,10 +842,9 @@ class packaged_task<R(Args...)> : public generic::continuable<Args...> {
         }
 
     private:
-        // Would this rather be a regular pointer?
-        // Continuable::continuation_chain already has a shared pointer to the
-        // same object.
-        std::shared_ptr<shared_state<R>> _state;
+        // Non owning reference to the shared state. It is generic::continuable
+        // who owns the continuation
+        std::weak_ptr<shared_state<R>> _state_ref;
 };
 
 template < class T, bool shared >
@@ -871,6 +884,16 @@ inline auto future_impl<T,shared>::then( F&& f ) {
         _state.reset();
 
     return future<value_type>(std::move(new_state));
+}
+
+template <>
+inline void future_impl<void,true>::get() {
+    return _state->reference();
+}
+
+template <>
+inline void future_impl<void,false>::get() {
+    return _state->value();
 }
 
 template < bool shared >
